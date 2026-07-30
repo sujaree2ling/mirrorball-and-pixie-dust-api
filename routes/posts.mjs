@@ -80,12 +80,16 @@ postsRouter.get("/", async (req, res) => {
     const limit = Number(req.query.limit) || 6;
     const category = req.query.category;
     const keyword = req.query.keyword;
-    const status = req.query.status || "published";
+    const statusParam = req.query.status;
+    const status =
+      statusParam === undefined || statusParam === ""
+        ? "published"
+        : statusParam;
 
     const conditions = [];
     const values = [];
 
-    if (status) {
+    if (status && status !== "all") {
       values.push(status);
       conditions.push(`status = $${values.length}`);
     }

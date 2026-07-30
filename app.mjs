@@ -8,13 +8,26 @@ const PORT = process.env.PORT || 4000;
 
 app.use(express.json());
 
+const allowedOrigins = [
+  "http://localhost:5173", // Vite frontend (local)
+  "http://localhost:3000",
+  "https://mirrorball-and-pixie-dust.vercel.app",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173", // Vite frontend (local)
-      "http://localhost:3000",
-      "https://mirrorball-and-pixie-dust.vercel.app",
-    ],
+    origin(origin, callback) {
+      // Allow non-browser tools (no Origin) and Vercel preview URLs
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.endsWith(".vercel.app")
+      ) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
   })
 );
 
