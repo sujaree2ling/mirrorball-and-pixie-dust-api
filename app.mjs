@@ -13,8 +13,7 @@ app.use(
     origin: [
       "http://localhost:5173", // Vite frontend (local)
       "http://localhost:3000",
-      // Replace with your deployed frontend URL when ready:
-      // "https://your-frontend.vercel.app",
+      "https://mirrorball-and-pixie-dust.vercel.app",
     ],
   })
 );

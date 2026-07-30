@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node app.mjs",
     "dev": "nodemon app.mjs",
+    "seed:sql": "node scripts/generate-seed-sql.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

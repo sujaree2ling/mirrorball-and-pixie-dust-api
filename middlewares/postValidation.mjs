@@ -1,10 +1,10 @@
 const postFields = [
   { key: "title", type: "string", label: "Title" },
   { key: "image", type: "string", label: "Image" },
-  { key: "category_id", type: "number", label: "Category_id" },
+  { key: "category", type: "string", label: "Category" },
   { key: "description", type: "string", label: "Description" },
   { key: "content", type: "string", label: "Content" },
-  { key: "status_id", type: "number", label: "Status_id" },
+  { key: "status", type: "string", label: "Status" },
 ];
 
 function getPostValidationError(body = {}) {
@@ -18,6 +18,10 @@ function getPostValidationError(body = {}) {
     if (typeof value !== field.type) {
       return `${field.label} must be a ${field.type}`;
     }
+  }
+
+  if (!["draft", "published"].includes(body.status)) {
+    return "Status must be draft or published";
   }
 
   return null;
