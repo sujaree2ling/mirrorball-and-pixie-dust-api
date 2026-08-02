@@ -2,6 +2,9 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import postsRouter from "./routes/posts.mjs";
+import authRouter from "./routes/auth.mjs";
+import protectUser from "./middlewares/protectUser.mjs";
+import protectAdmin from "./middlewares/protectAdmin.mjs";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -31,7 +34,16 @@ app.use(
   })
 );
 
+app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
+
+app.get("/protected-route", protectUser, (req, res) => {
+  res.json({ message: "This is protected content", user: req.user });
+});
+
+app.get("/admin-only", protectAdmin, (req, res) => {
+  res.json({ message: "This is admin-only content", admin: req.user });
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
