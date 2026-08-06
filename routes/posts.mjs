@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { pool } from "../utils/db.mjs";
 import { validatePostData } from "../middlewares/postValidation.mjs";
+import { imageFileUpload } from "../middlewares/upload.mjs";
+import protectAdmin from "../middlewares/protectAdmin.mjs";
+import { uploadImageFile } from "../utils/uploadImage.mjs";
 
 const postsRouter = Router();
 
@@ -22,57 +25,79 @@ function mapPost(row) {
   };
 }
 
-postsRouter.post("/", validatePostData, async (req, res) => {
-  const {
-    title,
-    image,
-    category,
-    description,
-    content,
-    status = "published",
-    image_position = "center",
-    author = "Admin",
-    likes = 0,
-    date,
-  } = req.body;
+function getUploadedFile(req) {
+  return req.files?.imageFile?.[0] ?? null;
+}
 
-  try {
-    const result = await pool.query(
-      `insert into posts (
-         id, title, image, category, description, content,
-         status, image_position, author, likes, date
-       )
-       values (
-         coalesce((select max(id) from posts), 0) + 1,
-         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-         coalesce($10::date, current_date)
-       )
-       returning *`,
-      [
-        title,
-        image,
-        category,
-        description,
-        content,
-        status,
-        image_position,
-        author,
-        likes,
-        date ?? null,
-      ]
-    );
+async function resolveImageUrl(req) {
+  const file = getUploadedFile(req);
 
-    return res.status(201).json({
-      message: "Created post sucessfully",
-      post: mapPost(result.rows[0]),
-    });
-  } catch (error) {
-    console.error("Create post error:", error);
-    return res.status(500).json({
-      message: "Server could not create post because database connection",
-    });
+  if (file) {
+    return uploadImageFile(file, "posts");
   }
-});
+
+  return req.body.image;
+}
+
+postsRouter.post(
+  "/",
+  protectAdmin,
+  imageFileUpload,
+  validatePostData,
+  async (req, res) => {
+    const {
+      title,
+      category,
+      description,
+      content,
+      status = "published",
+      image_position = "center",
+      author = "Admin",
+      likes = 0,
+      date,
+    } = req.body;
+
+    try {
+      const image = await resolveImageUrl(req);
+
+      const result = await pool.query(
+        `insert into posts (
+           id, title, image, category, description, content,
+           status, image_position, author, likes, date
+         )
+         values (
+           coalesce((select max(id) from posts), 0) + 1,
+           $1, $2, $3, $4, $5, $6, $7, $8, $9,
+           coalesce($10::date, current_date)
+         )
+         returning *`,
+        [
+          title,
+          image,
+          category,
+          description,
+          content,
+          status,
+          image_position,
+          author,
+          likes,
+          date ?? null,
+        ]
+      );
+
+      return res.status(201).json({
+        message: "Created post sucessfully",
+        post: mapPost(result.rows[0]),
+      });
+    } catch (error) {
+      console.error("Create post error:", error);
+      return res.status(500).json({
+        message: "Server could not create post because database connection",
+        error: error.message,
+      });
+    }
+  }
+);
 
 postsRouter.get("/", async (req, res) => {
   try {
@@ -171,70 +196,78 @@ postsRouter.get("/:postId", async (req, res) => {
   }
 });
 
-postsRouter.put("/:postId", validatePostData, async (req, res) => {
-  const postId = req.params.postId;
-  const {
-    title,
-    image,
-    category,
-    description,
-    content,
-    status = "published",
-    image_position = "center",
-    author,
-    likes,
-    date,
-  } = req.body;
+postsRouter.put(
+  "/:postId",
+  protectAdmin,
+  imageFileUpload,
+  validatePostData,
+  async (req, res) => {
+    const postId = req.params.postId;
+    const {
+      title,
+      category,
+      description,
+      content,
+      status = "published",
+      image_position = "center",
+      author,
+      likes,
+      date,
+    } = req.body;
 
-  try {
-    const result = await pool.query(
-      `update posts
-       set title = $1,
-           image = $2,
-           category = $3,
-           description = $4,
-           content = $5,
-           status = $6,
-           image_position = $7,
-           author = coalesce($8, author),
-           likes = coalesce($9, likes),
-           date = coalesce($10::date, date)
-       where id = $11
-       returning *`,
-      [
-        title,
-        image,
-        category,
-        description,
-        content,
-        status,
-        image_position,
-        author ?? null,
-        likes ?? null,
-        date ?? null,
-        postId,
-      ]
-    );
+    try {
+      const image = await resolveImageUrl(req);
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({
-        message: "Server could not find a requested post to update",
+      const result = await pool.query(
+        `update posts
+         set title = $1,
+             image = $2,
+             category = $3,
+             description = $4,
+             content = $5,
+             status = $6,
+             image_position = $7,
+             author = coalesce($8, author),
+             likes = coalesce($9, likes),
+             date = coalesce($10::date, date)
+         where id = $11
+         returning *`,
+        [
+          title,
+          image,
+          category,
+          description,
+          content,
+          status,
+          image_position,
+          author ?? null,
+          likes ?? null,
+          date ?? null,
+          postId,
+        ]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          message: "Server could not find a requested post to update",
+        });
+      }
+
+      return res.status(200).json({
+        message: "Updated post sucessfully",
+        post: mapPost(result.rows[0]),
+      });
+    } catch (error) {
+      console.error("Update post error:", error);
+      return res.status(500).json({
+        message: "Server could not update post because database connection",
+        error: error.message,
       });
     }
-
-    return res.status(200).json({
-      message: "Updated post sucessfully",
-      post: mapPost(result.rows[0]),
-    });
-  } catch (error) {
-    console.error("Update post error:", error);
-    return res.status(500).json({
-      message: "Server could not update post because database connection",
-    });
   }
-});
+);
 
-postsRouter.delete("/:postId", async (req, res) => {
+postsRouter.delete("/:postId", protectAdmin, async (req, res) => {
   const postId = req.params.postId;
 
   try {
