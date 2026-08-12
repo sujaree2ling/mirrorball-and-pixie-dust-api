@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import postsRouter from "./routes/posts.mjs";
 import authRouter from "./routes/auth.mjs";
+import chatRouter from "./routes/chat.mjs";
 import protectUser from "./middlewares/protectUser.mjs";
 import protectAdmin from "./middlewares/protectAdmin.mjs";
 
@@ -36,6 +37,7 @@ app.use(
 
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
+app.use("/chat", chatRouter);
 
 app.get("/protected-route", protectUser, (req, res) => {
   res.json({ message: "This is protected content", user: req.user });
