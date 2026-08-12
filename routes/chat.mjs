@@ -41,8 +41,8 @@ async function getBlogContext() {
     .join("\n\n");
 }
 
-function buildMessages(userMessage, history, blogContext) {
-  const systemPrompt = `You are the helpful assistant for LingLingS, a personal blog by Sujaree S. about Taylor Swift and Disney.
+function buildSystemPrompt(blogContext) {
+  return `You are the helpful assistant for LingLingS, a personal blog by Sujaree S. about Taylor Swift and Disney.
 
 Rules:
 - Answer based on the blog article context below when possible.
@@ -54,9 +54,10 @@ Rules:
 
 Blog article context:
 ${blogContext}`;
+}
 
-  const messages = [{ role: "system", content: systemPrompt }];
-
+function buildGeminiContents(userMessage, history) {
+  const contents = [];
   const safeHistory = Array.isArray(history) ? history.slice(-MAX_HISTORY) : [];
 
   for (const item of safeHistory) {
@@ -69,24 +70,28 @@ ${blogContext}`;
       continue;
     }
 
-    messages.push({
-      role: item.role,
-      content: item.content.trim().slice(0, MAX_MESSAGE_LENGTH),
+    contents.push({
+      role: item.role === "assistant" ? "model" : "user",
+      parts: [{ text: item.content.trim().slice(0, MAX_MESSAGE_LENGTH) }],
     });
   }
 
-  messages.push({ role: "user", content: userMessage });
-  return messages;
+  contents.push({
+    role: "user",
+    parts: [{ text: userMessage }],
+  });
+
+  return contents;
 }
 
 chatRouter.post("/", async (req, res) => {
   const { message, history = [] } = req.body ?? {};
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     return res.status(503).json({
       error:
-        "Chat is not configured yet. Add OPENAI_API_KEY to the API environment.",
+        "Chat is not configured yet. Add GEMINI_API_KEY to the API environment.",
     });
   }
 
@@ -95,35 +100,46 @@ chatRouter.post("/", async (req, res) => {
   }
 
   const userMessage = message.trim().slice(0, MAX_MESSAGE_LENGTH);
+  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
   try {
     const blogContext = await getBlogContext();
-    const messages = buildMessages(userMessage, history, blogContext);
+    const contents = buildGeminiContents(userMessage, history);
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: buildSystemPrompt(blogContext) }],
+          },
+          contents,
+          generationConfig: {
+            temperature: 0.5,
+            maxOutputTokens: 400,
+          },
+        }),
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages,
-        temperature: 0.5,
-        max_tokens: 400,
-      }),
-    });
+    );
 
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("OpenAI chat error:", data);
+      console.error("Gemini chat error:", data);
       return res.status(502).json({
-        error: data?.error?.message || "Failed to get a reply from the AI",
+        error:
+          data?.error?.message || "Failed to get a reply from the AI",
       });
     }
 
-    const reply = data.choices?.[0]?.message?.content?.trim();
+    const reply = data.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim();
 
     if (!reply) {
       return res.status(502).json({ error: "Empty reply from the AI" });
