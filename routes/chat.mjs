@@ -44,15 +44,25 @@ async function getBlogContext() {
 function buildSystemPrompt(blogContext) {
   return `You are the helpful assistant for LingLingS, a personal blog by Sujaree S. about Taylor Swift and Disney.
 
-Rules:
-- Answer based on the blog article context below when possible.
-- If the answer is not in the context, say you are not sure and suggest browsing the articles.
-- Keep answers concise and friendly (2-6 short sentences).
-- Reply in the same language the user uses (Thai or English).
-- When relevant, mention article titles and that readers can open /post/{id}.
-- Do not invent articles that are not listed.
+Always reply with the final answer only.
+Do not write analysis labels, checklists, "review against rules", or hidden reasoning.
+Do not start with labels like "Context-based" or "Rules".
 
-Blog article context:
+What you can answer:
+- Anything about Taylor Swift: songs, lyrics, albums, eras, meanings, interpretations, Easter eggs, tours, and related stories.
+- Anything about Disney: movies, characters, songs, themes, and storytelling.
+- Questions about this blog and its published articles when relevant.
+
+How to answer:
+- You do NOT need to limit answers only to the blog article context below.
+- For lyric interpretation or deeper meaning questions, give a thoughtful clear explanation even if the exact lyric is not in the blog.
+- If the question relates to a published blog article, you may mention that article and /post/{id}.
+- Keep answers friendly and clear. Prefer 3-8 short sentences, or short bullet points when useful.
+- Reply in the same language the user uses (Thai or English).
+- When answering in Thai, write in a natural neutral tone. Do not use ending particles such as คะ, ค่ะ, ครับ, นะ, อะ, จ้า, or similar polite/chatty endings.
+- If you are unsure about a very obscure fact, say so briefly and still share the most likely interpretation.
+
+Optional blog article context (use when helpful, not as a hard limit):
 ${blogContext}`;
 }
 
@@ -84,6 +94,28 @@ function buildGeminiContents(userMessage, history) {
   return contents;
 }
 
+function extractReply(data) {
+  const parts = data.candidates?.[0]?.content?.parts || [];
+
+  const text = parts
+    .filter((part) => typeof part.text === "string" && !part.thought)
+    .map((part) => part.text)
+    .join("")
+    .trim();
+
+  return text;
+}
+
+function looksLikeBadReply(text) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("review against rules") ||
+    lower.startsWith("context-based") ||
+    lower.startsWith("**review") ||
+    /^[-*]\s*context/i.test(text)
+  );
+}
+
 chatRouter.post("/", async (req, res) => {
   const { message, history = [] } = req.body ?? {};
   const apiKey = process.env.GEMINI_API_KEY;
@@ -100,7 +132,7 @@ chatRouter.post("/", async (req, res) => {
   }
 
   const userMessage = message.trim().slice(0, MAX_MESSAGE_LENGTH);
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
 
   try {
     const blogContext = await getBlogContext();
@@ -119,8 +151,8 @@ chatRouter.post("/", async (req, res) => {
           },
           contents,
           generationConfig: {
-            temperature: 0.5,
-            maxOutputTokens: 400,
+            temperature: 0.4,
+            maxOutputTokens: 800,
           },
         }),
       },
@@ -131,18 +163,20 @@ chatRouter.post("/", async (req, res) => {
     if (!response.ok) {
       console.error("Gemini chat error:", data);
       return res.status(502).json({
-        error:
-          data?.error?.message || "Failed to get a reply from the AI",
+        error: data?.error?.message || "Failed to get a reply from the AI",
       });
     }
 
-    const reply = data.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text || "")
-      .join("")
-      .trim();
+    const reply = extractReply(data);
 
-    if (!reply) {
-      return res.status(502).json({ error: "Empty reply from the AI" });
+    if (!reply || looksLikeBadReply(reply)) {
+      console.error("Gemini bad reply:", {
+        finishReason: data.candidates?.[0]?.finishReason,
+        reply,
+      });
+      return res.status(502).json({
+        error: "The AI returned an incomplete answer. Please try again.",
+      });
     }
 
     return res.status(200).json({ reply });
