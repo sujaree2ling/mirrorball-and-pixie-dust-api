@@ -124,6 +124,21 @@ function looksLikeBadReply(text) {
   );
 }
 
+function mapGeminiErrorMessage(message = "", status = 0) {
+  const text = String(message);
+
+  if (
+    status === 429 ||
+    /exceeded your current quota|quota|rate.?limit|resource.?exhausted/i.test(
+      text,
+    )
+  ) {
+    return "You exceeded your current quota";
+  }
+
+  return text || "Failed to get a reply from the AI";
+}
+
 chatRouter.post("/", async (req, res) => {
   const { message, history = [] } = req.body ?? {};
   const apiKey = process.env.GEMINI_API_KEY;
@@ -194,8 +209,11 @@ chatRouter.post("/", async (req, res) => {
 
     if (!response.ok) {
       console.error("Gemini chat error:", data);
-      return res.status(502).json({
-        error: data?.error?.message || "Failed to get a reply from the AI",
+      return res.status(response.status === 429 ? 429 : 502).json({
+        error: mapGeminiErrorMessage(
+          data?.error?.message,
+          response.status,
+        ),
       });
     }
 
