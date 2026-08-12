@@ -53,16 +53,24 @@ What you can answer:
 - Anything about Disney: movies, characters, songs, themes, and storytelling.
 - Questions about this blog and its published articles when relevant.
 
-How to answer:
-- You do NOT need to limit answers only to the blog article context below.
-- For lyric interpretation or deeper meaning questions, give a thoughtful clear explanation even if the exact lyric is not in the blog.
-- If the question relates to a published blog article, you may mention that article and /post/{id}.
+Accuracy rules for lyrics / song facts:
+- Use Google Search grounding to verify song title and album before answering.
+- Never guess a song from theme similarity alone (for example, lyrics about colors or light are NOT automatically from Daylight).
+- Match the lyric wording carefully. Similar metaphors across songs are easy to confuse.
+- If you cannot verify the song with high confidence, say you are unsure instead of inventing a title.
+- After identifying the correct song, explain the meaning clearly.
+
+Blog citation rules:
+- Only mention a blog article and /post/{id} if that article clearly discusses the same song, lyric, or topic.
+- Never invent a blog source. Never say the answer is "ตามแนวคิดจากบทความ" unless the article truly covers it.
+- If no article matches, answer from verified knowledge and skip any /post link.
+
+General style:
 - Keep answers friendly and clear. Prefer 3-8 short sentences, or short bullet points when useful.
 - Reply in the same language the user uses (Thai or English).
 - When answering in Thai, write in a natural neutral tone. Do not use ending particles such as คะ, ค่ะ, ครับ, นะ, อะ, จ้า, or similar polite/chatty endings.
-- If you are unsure about a very obscure fact, say so briefly and still share the most likely interpretation.
 
-Optional blog article context (use when helpful, not as a hard limit):
+Optional blog article context (secondary reference only):
 ${blogContext}`;
 }
 
@@ -132,33 +140,57 @@ chatRouter.post("/", async (req, res) => {
   }
 
   const userMessage = message.trim().slice(0, MAX_MESSAGE_LENGTH);
-  const model = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
+  const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
   try {
     const blogContext = await getBlogContext();
     const contents = buildGeminiContents(userMessage, history);
 
-    const response = await fetch(
+    const requestBody = {
+      system_instruction: {
+        parts: [{ text: buildSystemPrompt(blogContext) }],
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 800,
+      },
+      // Ground lyric/song facts with live web search when available
+      tools: [{ google_search: {} }],
+    };
+
+    let response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: buildSystemPrompt(blogContext) }],
-          },
-          contents,
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 800,
-          },
-        }),
+        body: JSON.stringify(requestBody),
       },
     );
 
-    const data = await response.json();
+    let data = await response.json();
+
+    // Some models/keys may reject google_search — retry without tools
+    if (
+      !response.ok &&
+      typeof data?.error?.message === "string" &&
+      /tool|google_search|search/i.test(data.error.message)
+    ) {
+      delete requestBody.tools;
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        },
+      );
+      data = await response.json();
+    }
 
     if (!response.ok) {
       console.error("Gemini chat error:", data);
