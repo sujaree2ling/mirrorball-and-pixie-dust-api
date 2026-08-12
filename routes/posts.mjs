@@ -1,9 +1,15 @@
 import { Router } from "express";
 import { pool } from "../utils/db.mjs";
+import { supabase } from "../utils/supabase.mjs";
 import { validatePostData } from "../middlewares/postValidation.mjs";
 import { imageFileUpload } from "../middlewares/upload.mjs";
 import protectAdmin from "../middlewares/protectAdmin.mjs";
+import protectUser from "../middlewares/protectUser.mjs";
 import { uploadImageFile } from "../utils/uploadImage.mjs";
+import {
+  notifyPostOwners,
+  notifyThreadCommenters,
+} from "../utils/notifications.mjs";
 
 const postsRouter = Router();
 
@@ -193,6 +199,201 @@ postsRouter.get("/:postId", async (req, res) => {
     return res.status(500).json({
       message: "Server could not read post because database connection",
     });
+  }
+});
+
+function mapComment(row) {
+  return {
+    id: row.id,
+    postId: row.post_id,
+    author: row.name || row.username || "User",
+    avatar: row.profile_pic || "/icon.png",
+    date: row.created_at,
+    content: row.comment_text ?? row.content,
+  };
+}
+
+postsRouter.get("/:postId/comments", async (req, res) => {
+  const postId = req.params.postId;
+
+  try {
+    const post = await pool.query(`select id from posts where id = $1`, [
+      postId,
+    ]);
+
+    if (!post.rows[0]) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const { rows } = await pool.query(
+      `select c.id, c.post_id, c.comment_text, c.created_at,
+              u.name, u.username, u.profile_pic
+       from comments c
+       join users u on u.id = c.user_id
+       where c.post_id = $1
+       order by c.created_at desc`,
+      [postId],
+    );
+
+    return res.status(200).json({ comments: rows.map(mapComment) });
+  } catch (error) {
+    console.error("Read comments error:", error);
+    return res.status(500).json({ error: "Failed to load comments" });
+  }
+});
+
+postsRouter.post("/:postId/comments", protectUser, async (req, res) => {
+  const postId = req.params.postId;
+  const content =
+    typeof req.body?.content === "string" ? req.body.content.trim() : "";
+
+  if (!content) {
+    return res.status(400).json({ error: "Comment content is required" });
+  }
+
+  if (content.length > 2000) {
+    return res.status(400).json({ error: "Comment is too long" });
+  }
+
+  try {
+    const post = await pool.query(`select id from posts where id = $1`, [
+      postId,
+    ]);
+
+    if (!post.rows[0]) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const { rows } = await pool.query(
+      `with inserted as (
+         insert into comments (post_id, user_id, comment_text)
+         values ($1, $2, $3)
+         returning id, post_id, comment_text, created_at, user_id
+       )
+       select i.id, i.post_id, i.comment_text, i.created_at,
+              u.name, u.username, u.profile_pic
+       from inserted i
+       join users u on u.id = i.user_id`,
+      [postId, req.user.id, content],
+    );
+
+    await notifyPostOwners({
+      actorId: req.user.id,
+      postId,
+      type: "comment",
+      excerpt: content,
+    });
+    await notifyThreadCommenters({
+      actorId: req.user.id,
+      postId,
+      excerpt: content,
+    });
+
+    return res.status(201).json({ comment: mapComment(rows[0]) });
+  } catch (error) {
+    console.error("Create comment error:", error);
+    return res.status(500).json({ error: "Failed to create comment" });
+  }
+});
+
+postsRouter.get("/:postId/like", async (req, res) => {
+  const postId = req.params.postId;
+  const token = req.headers.authorization?.split(" ")[1];
+
+  try {
+    const post = await pool.query(`select id, likes from posts where id = $1`, [
+      postId,
+    ]);
+
+    if (!post.rows[0]) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    let liked = false;
+
+    if (token) {
+      const { data, error } = await supabase.auth.getUser(token);
+
+      if (!error && data?.user?.id) {
+        const like = await pool.query(
+          `select 1 from post_likes where post_id = $1 and user_id = $2`,
+          [postId, data.user.id],
+        );
+        liked = like.rows.length > 0;
+      }
+    }
+
+    return res.status(200).json({
+      likes: post.rows[0].likes ?? 0,
+      liked,
+    });
+  } catch (error) {
+    console.error("Read like status error:", error);
+    return res.status(500).json({ error: "Failed to load like status" });
+  }
+});
+
+postsRouter.post("/:postId/like", protectUser, async (req, res) => {
+  const postId = req.params.postId;
+  const userId = req.user.id;
+
+  try {
+    const post = await pool.query(`select id, likes from posts where id = $1`, [
+      postId,
+    ]);
+
+    if (!post.rows[0]) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    const existing = await pool.query(
+      `select 1 from post_likes where post_id = $1 and user_id = $2`,
+      [postId, userId],
+    );
+
+    let liked;
+
+    if (existing.rows.length > 0) {
+      await pool.query(
+        `delete from post_likes where post_id = $1 and user_id = $2`,
+        [postId, userId],
+      );
+      await pool.query(
+        `update posts
+         set likes = greatest(coalesce(likes, 0) - 1, 0)
+         where id = $1`,
+        [postId],
+      );
+      liked = false;
+    } else {
+      await pool.query(
+        `insert into post_likes (post_id, user_id) values ($1, $2)`,
+        [postId, userId],
+      );
+      await pool.query(
+        `update posts set likes = coalesce(likes, 0) + 1 where id = $1`,
+        [postId],
+      );
+      liked = true;
+
+      await notifyPostOwners({
+        actorId: userId,
+        postId,
+        type: "like",
+      });
+    }
+
+    const updated = await pool.query(`select likes from posts where id = $1`, [
+      postId,
+    ]);
+
+    return res.status(200).json({
+      liked,
+      likes: updated.rows[0]?.likes ?? 0,
+    });
+  } catch (error) {
+    console.error("Toggle like error:", error);
+    return res.status(500).json({ error: "Failed to update like" });
   }
 });
 
