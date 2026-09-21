@@ -36,6 +36,10 @@ app.use(
   })
 );
 
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true, time: new Date().toISOString() });
+});
+
 app.use("/auth", authRouter);
 app.use("/posts", postsRouter);
 app.use("/chat", chatRouter);
