@@ -7,6 +7,7 @@ import chatRouter from "./routes/chat.mjs";
 import notificationsRouter from "./routes/notifications.mjs";
 import protectUser from "./middlewares/protectUser.mjs";
 import protectAdmin from "./middlewares/protectAdmin.mjs";
+import { pool } from "./utils/db.mjs";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -36,8 +37,23 @@ app.use(
   })
 );
 
-app.get("/health", (_req, res) => {
-  res.status(200).json({ ok: true, time: new Date().toISOString() });
+app.get("/health", async (_req, res) => {
+  try {
+    // Touch Postgres so Supabase free tier sees activity (keep-alive cron)
+    await pool.query("select 1");
+    return res.status(200).json({
+      ok: true,
+      db: "up",
+      time: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Health check DB error:", error);
+    return res.status(503).json({
+      ok: false,
+      db: "down",
+      time: new Date().toISOString(),
+    });
+  }
 });
 
 app.use("/auth", authRouter);
